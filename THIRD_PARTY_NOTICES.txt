@@ -1,0 +1,13 @@
+Third-party components used by ChessLens
+
+1. Stockfish 18
+   License: GNU General Public License v3.0 or later.
+   Official source: https://github.com/official-stockfish/Stockfish
+   Binary release tag: sf_18
+   The Android ARM64 executable is downloaded from the official Stockfish release during GitHub Actions builds and SHA-256 verified before packaging.
+   Corresponding source and license are available from the official repository above.
+
+2. Board detection and template-classifier implementation
+   Adapted from OpenCheps, https://github.com/Sethdsai/opencheps
+   Copyright (c) 2026 OpenCheps contributors
+   License: MIT. The MIT license notice is retained in the upstream repository.
