@@ -3,6 +3,7 @@ package com.chesslens.app
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -37,7 +38,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun ChessLensApp() {
     var screenshot by remember { mutableStateOf<Uri?>(null) }
-    var selected by remember { mutableStateOf("P") }
+    var selected by remember { mutableStateOf("♙") }
     var turn by remember { mutableStateOf("w") }
     var fen by remember { mutableStateOf("") }
     val board = remember { mutableStateListOf<String>().apply { repeat(64) { add("·") } } }
@@ -70,10 +71,9 @@ fun ChessLensApp() {
                     pieces.chunked(7).forEach { group ->
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             group.forEach { p ->
-                                val code = fenChars[p] ?: "·"
                                 FilterChip(
-                                    selected = selected == code,
-                                    onClick = { selected = code },
+                                    selected = selected == p,
+                                    onClick = { selected = p },
                                     label = { Text(p, fontSize = 18.sp) }
                                 )
                             }
@@ -113,7 +113,7 @@ fun ChessLensApp() {
                                     val p = board[r * 8 + c]
                                     if (p == "·") empty++ else {
                                         if (empty > 0) { append(empty); empty = 0 }
-                                        append(p)
+                                        append(fenChars[p] ?: "")
                                     }
                                 }
                                 if (empty > 0) append(empty)
