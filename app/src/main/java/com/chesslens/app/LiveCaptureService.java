@@ -130,7 +130,7 @@ public class LiveCaptureService extends Service {
         }});
         wm.addView(panel,lp);
     }
-    private void setBoardFrame(BoardDetector.Board b){if(arrows!=null)arrows.setPosition(new RectF(b.left*sx,b.top*sy,(b.left+b.side)*sx,(b.top+b.side)*sy),Collections.emptyList());}
+    private void setBoardFrame(BoardDetector.Board b){if(arrows!=null)arrows.setBoardBounds(new RectF(b.left*sx,b.top*sy,(b.left+b.side)*sx,(b.top+b.side)*sy));}
     private void clearArrows(){if(arrows!=null)arrows.clear();}
     private void setStatus(String s){if(status!=null)status.post(()->status.setText(s));}
     private void setEval(String s){if(eval!=null)eval.post(()->eval.setText(s));}
