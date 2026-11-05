@@ -64,8 +64,9 @@ public final class PieceClassifier {
         boolean white=Math.abs(s.luminance-whiteLum)<Math.abs(s.luminance-blackLum);
         float best=Float.MAX_VALUE;char chosen=white?'P':'p';
         for(int i=0;i<64;i++){char c=labels[i];if(c=='.'||Character.isUpperCase(c)!=white)continue;
-            float d=SquareSampler.distance(s.pixels,templates[i].pixels);if(d<best){best=d;chosen=c;}}
-        return chosen;
+            float d=SquareSampler.normalizedDistance(s.pixels,templates[i].pixels);if(d<best){best=d;chosen=c;}}
+        // Do not invent a piece when no calibrated template is a reasonable fit.
+        return best > .48f ? '?' : chosen;
     }
     public void commit(char[][] grid,Bitmap b,BoardDetector.Board board){
         if(!ready||grid==null)return;previous=samples(b,board);previousLabels=new char[64];
