@@ -8,6 +8,7 @@ import java.util.*;
 public final class ArrowOverlayView extends View {
     private final Paint paint=new Paint(3);private final List<float[]> arrows=new ArrayList<>();private RectF board;
     public ArrowOverlayView(Context c){super(c);setLayerType(View.LAYER_TYPE_SOFTWARE,null);}
+    public void setBoardBounds(RectF bounds){board=bounds;postInvalidate();}
     public void setPosition(RectF bounds,List<float[]> values){board=bounds;arrows.clear();arrows.addAll(values);postInvalidate();}
     public void clear(){board=null;arrows.clear();postInvalidate();}
     @Override protected void onDraw(Canvas c){super.onDraw(c);if(board!=null){paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(5);paint.setColor(0x8800E676);c.drawRect(board,paint);}
