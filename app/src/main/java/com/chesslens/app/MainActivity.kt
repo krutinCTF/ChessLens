@@ -1,7 +1,13 @@
 package com.chesslens.app
 
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -29,14 +35,34 @@ private val fenChars = mapOf("♙" to "P", "♘" to "N", "♗" to "B", "♖" to 
     "♟" to "p", "♞" to "n", "♝" to "b", "♜" to "r", "♛" to "q", "♚" to "k")
 
 class MainActivity : ComponentActivity() {
+    private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val service = Intent(this, LiveCaptureService::class.java).apply {
+                putExtra(LiveCaptureService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(LiveCaptureService.EXTRA_DATA, result.data)
+            }
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { ChessLensApp() }
+        setContent { ChessLensApp(onStartLive = { startLiveCapture() }) }
+    }
+
+    private fun startLiveCapture() {
+        if (!Settings.canDrawOverlays(this)) {
+            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            startActivity(intent)
+            return
+        }
+        val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        projectionLauncher.launch(manager.createScreenCaptureIntent())
     }
 }
 
 @Composable
-fun ChessLensApp() {
+fun ChessLensApp(onStartLive: () -> Unit) {
     var screenshot by remember { mutableStateOf<Uri?>(null) }
     var selected by remember { mutableStateOf("♙") }
     var turn by remember { mutableStateOf("w") }
@@ -55,50 +81,46 @@ fun ChessLensApp() {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text("ChessLens", color = Color.White, fontSize = 28.sp)
-                Text("Импорт позиции для последующего анализа", color = Color(0xFFB8B8C8))
+                Text("Live-захват экрана и учебный анализ позиций", color = Color(0xFFB8B8C8))
+                Button(onClick = onStartLive, modifier = Modifier.fillMaxWidth()) {
+                    Text("Запустить Live-панель")
+                }
+                Text("После разрешения Android открой Chess.com. Панель можно перетаскивать и остановить кнопкой.", color = Color(0xFFB8B8C8), fontSize = 12.sp)
+                Divider(color = Color(0xFF343444))
+                Text("Разбор позиции вручную", color = Color.White, fontSize = 18.sp)
                 Button(onClick = { picker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Выбрать скриншот Chess.com")
+                    Text("Выбрать скриншот")
                 }
                 screenshot?.let {
                     AsyncImage(
                         model = it, contentDescription = "Импортированный скриншот",
-                        modifier = Modifier.fillMaxWidth().height(130.dp).background(Color.DarkGray, RoundedCornerShape(12.dp)),
+                        modifier = Modifier.fillMaxWidth().height(100.dp).background(Color.DarkGray, RoundedCornerShape(12.dp)),
                         contentScale = ContentScale.Fit
                     )
                 }
-                Text("1. Выбери фигуру, затем нажми клетку:", color = Color.White)
+                Text("Выбери фигуру, затем нажми клетку:", color = Color.White)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     pieces.chunked(7).forEach { group ->
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             group.forEach { p ->
-                                FilterChip(
-                                    selected = selected == p,
-                                    onClick = { selected = p },
-                                    label = { Text(p, fontSize = 18.sp) }
-                                )
+                                FilterChip(selected = selected == p, onClick = { selected = p }, label = { Text(p, fontSize = 18.sp) })
                             }
                         }
                     }
                 }
-                Text("2. Расставь фигуры на доске:", color = Color.White)
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(8),
-                    modifier = Modifier.fillMaxWidth().aspectRatio(1f),
-                    userScrollEnabled = false
-                ) {
+                Text("Доска:", color = Color.White)
+                LazyVerticalGrid(columns = GridCells.Fixed(8), modifier = Modifier.fillMaxWidth().aspectRatio(1f), userScrollEnabled = false) {
                     itemsIndexed(board) { index, piece ->
                         val row = index / 8
                         val col = index % 8
                         val light = (row + col) % 2 == 0
                         Box(
-                            Modifier.aspectRatio(1f)
-                                .background(if (light) Color(0xFFF0D9B5) else Color(0xFFB58863))
+                            Modifier.aspectRatio(1f).background(if (light) Color(0xFFF0D9B5) else Color(0xFFB58863))
                                 .clickable { board[index] = selected }
                                 .border(0.3.dp, Color.Black.copy(alpha = 0.15f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(piece, fontSize = 29.sp, color = if (piece.firstOrNull()?.isLowerCase() == true) Color(0xFF171717) else Color(0xFFFAFAFA))
-                            if (piece == "·" && row == 7) Text("abcdefgh"[col].toString(), Modifier.align(Alignment.BottomEnd), fontSize = 8.sp, color = Color.DarkGray)
                         }
                     }
                 }
@@ -122,14 +144,7 @@ fun ChessLensApp() {
                         fen = ranks.joinToString("/") + " $turn - - 0 1"
                     }) { Text("Создать FEN") }
                 }
-                if (fen.isNotBlank()) {
-                    Text("FEN", color = Color(0xFFA78BFA))
-                    Text(fen, color = Color.White, fontSize = 12.sp)
-                    OutlinedButton(onClick = { /* copy handled by long-press */ }) {
-                        Text("Удерживай FEN, чтобы скопировать")
-                    }
-                }
-                Text("Важно: сейчас скриншот загружается как образец, а фигуры расставляются вручную. Автораспознавание и Stockfish будут следующими этапами.", color = Color(0xFFB8B8C8), fontSize = 11.sp)
+                if (fen.isNotBlank()) Text("FEN: $fen", color = Color(0xFFA78BFA), fontSize = 12.sp)
             }
         }
     }
