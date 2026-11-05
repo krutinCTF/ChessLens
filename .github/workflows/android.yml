@@ -11,9 +11,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      STOCKFISH_TAG: sf_18
+      STOCKFISH_SHA256: cc3b3b74466b6d85cdc0f8cfdad4111c6a44bd0698f4eab96fea7b359a54d3d4
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -26,12 +28,39 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Cache Stockfish
+        id: stockfish-cache
+        uses: actions/cache@v4
+        with:
+          path: sf-cache
+          key: stockfish-${{ env.STOCKFISH_TAG }}-arm64-v1
+
+      - name: Download official Stockfish Android ARM64
+        if: steps.stockfish-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sf-cache
+          curl -fL --retry 3 -o sf-cache/stockfish.tar https://github.com/official-stockfish/Stockfish/releases/download/${STOCKFISH_TAG}/stockfish-android-armv8.tar
+          tar -xf sf-cache/stockfish.tar -C sf-cache
+          find sf-cache -type f -maxdepth 3 -print
+
+      - name: Verify and install Stockfish
+        run: |
+          set -euo pipefail
+          BIN="$(find sf-cache -type f -name 'stockfish-android-armv8' | head -n 1)"
+          test -n "$BIN"
+          echo "${STOCKFISH_SHA256}  $BIN" | sha256sum -c -
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          cp "$BIN" app/src/main/jniLibs/arm64-v8a/libstockfish.so
+          chmod 755 app/src/main/jniLibs/arm64-v8a/libstockfish.so
+          ls -lh app/src/main/jniLibs/arm64-v8a/libstockfish.so
+
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ChessLens-debug-apk
+          name: ChessLens-Live-arm64-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
