@@ -23,7 +23,9 @@ public final class MoveAnalyzer {
     public static boolean validPosition(char[][] b){
         int wk=0,bk=0,wp=0,bp=0;
         for(int r=0;r<8;r++)for(int f=0;f<8;f++){
-            char c=b[r][f];if(c=='K')wk++;if(c=='k')bk++;
+            char c=b[r][f];
+            if(c!='.'&&"KQRBNPkqrbnp".indexOf(c)<0)return false;
+            if(c=='K')wk++;if(c=='k')bk++;
             if(c=='P'){wp++;if(r==0||r==7)return false;}
             if(c=='p'){bp++;if(r==0||r==7)return false;}
         }
