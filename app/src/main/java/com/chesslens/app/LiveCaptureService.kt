@@ -1,234 +1,136 @@
-package com.chesslens.app
+package com.chesslens.app;
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
-import android.content.Intent
-import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.ImageReader
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
-import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.IBinder
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
-import android.view.WindowManager
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
-import android.graphics.Color
-import android.graphics.Typeface
-import android.view.Window
-import android.view.WindowManager.LayoutParams
-import android.content.Context
+import android.app.*;
+import android.content.*;
+import android.graphics.*;
+import android.hardware.display.*;
+import android.media.*;
+import android.media.projection.*;
+import android.os.*;
+import android.util.DisplayMetrics;
+import android.view.*;
+import android.widget.*;
+import com.chesslens.app.engine.StockfishEngine;
+import com.chesslens.app.overlay.ArrowOverlayView;
+import com.chesslens.app.vision.*;
+import java.nio.ByteBuffer;
+import java.util.*;
 
-class LiveCaptureService : Service() {
-    private var projection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var imageReader: ImageReader? = null
-    private var overlay: View? = null
-    private var frameCount = 0
-    private var lastFrameAt = 0L
-    private var statusText: TextView? = null
-    private lateinit var windowManager: WindowManager
-    private var worker: HandlerThread? = null
+public class LiveCaptureService extends Service {
+    public static final String EXTRA_RESULT_CODE="projection_result_code",EXTRA_DATA="projection_data",ACTION_STOP="com.chesslens.app.STOP_LIVE";
+    private static final String CHANNEL="chesslens_live";private static final int NOTIFICATION=4201;
+    private MediaProjection projection;private VirtualDisplay display;private ImageReader reader;private HandlerThread thread;private Handler worker;
+    private WindowManager wm;private View panel;private TextView status,eval;private ArrowOverlayView arrows;
+    private StockfishEngine engine;private final PieceClassifier classifier=new PieceClassifier();
+    private BoardDetector.Board lastBoard;private char[][] confirmed,candidate;private int candidateCount=0;
+    private boolean whiteToMove=true,paused=false,busy=false,engineReady=false;
+    private int screenW,screenH,captureW,captureH,density;private float sx=1f,sy=1f;
+    private final Runnable loop=new Runnable(){public void run(){if(!paused)sample();if(worker!=null)worker.postDelayed(this,550);}};
 
-    override fun onCreate() {
-        super.onCreate()
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        createNotificationChannel()
+    @Override public void onCreate(){super.onCreate();wm=(WindowManager)getSystemService(WINDOW_SERVICE);createChannel();}
+    @Override public int onStartCommand(Intent i,int flags,int id){
+        if(i!=null&&ACTION_STOP.equals(i.getAction())){stopSelf();return START_NOT_STICKY;}
+        if(i==null){stopSelf();return START_NOT_STICKY;}
+        int rc=i.getIntExtra(EXTRA_RESULT_CODE,0);
+        Intent data=Build.VERSION.SDK_INT>=33?i.getParcelableExtra(EXTRA_DATA,Intent.class):i.getParcelableExtra(EXTRA_DATA);
+        if(data==null||rc==0){stopSelf();return START_NOT_STICKY;}
+        startForeground(NOTIFICATION,notification());
+        try{
+            MediaProjectionManager m=(MediaProjectionManager)getSystemService(MEDIA_PROJECTION_SERVICE);
+            projection=m.getMediaProjection(rc,data);
+            if(projection==null){stopSelf();return START_NOT_STICKY;}
+            projection.registerCallback(new MediaProjection.Callback(){@Override public void onStop(){stopSelf();}},new Handler(Looper.getMainLooper()));
+            DisplayMetrics dm=new DisplayMetrics();((WindowManager)getSystemService(WINDOW_SERVICE)).getDefaultDisplay().getRealMetrics(dm);
+            screenW=dm.widthPixels;screenH=dm.heightPixels;density=dm.densityDpi;
+            float scale=Math.min(1f,800f/Math.max(screenW,screenH));captureW=Math.max(1,Math.round(screenW*scale));captureH=Math.max(1,Math.round(screenH*scale));sx=(float)screenW/captureW;sy=(float)screenH/captureH;
+            thread=new HandlerThread("ChessLensVision",Thread.NORM_PRIORITY);thread.start();worker=new Handler(thread.getLooper());
+            reader=ImageReader.newInstance(captureW,captureH,PixelFormat.RGBA_8888,3);
+            display=projection.createVirtualDisplay("ChessLensCapture",captureW,captureH,density,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,reader.getSurface(),null,worker);
+            engine=new StockfishEngine();worker.post(()->{try{engine.start(getApplicationContext());engineReady=true;setStatus("Stockfish готов · ищу доску");}catch(Exception e){setStatus("Ошибка Stockfish: "+e.getMessage());}});
+            showOverlay();worker.postDelayed(loop,800);
+        }catch(Exception e){stopSelf();}
+        return START_NOT_STICKY;
     }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
-        val data = if (Build.VERSION.SDK_INT >= 33) {
-            intent?.getParcelableExtra(EXTRA_DATA, Intent::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent?.getParcelableExtra(EXTRA_DATA)
-        }
-        if (data == null || resultCode == 0) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        startForeground(NOTIFICATION_ID, buildNotification())
-        startCapture(resultCode, data)
-        showOverlay()
-        return START_NOT_STICKY
-    }
-
-    private fun startCapture(resultCode: Int, data: Intent) {
-        try {
-            val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            projection = manager.getMediaProjection(resultCode, data)
-            val metrics = resources.displayMetrics
-            val width = metrics.widthPixels
-            val height = metrics.heightPixels
-            val density = metrics.densityDpi
-
-            worker = HandlerThread("ChessLensCapture").also { it.start() }
-            val handler = Handler(worker!!.looper)
-            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-            imageReader!!.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage()
-                if (image != null) {
-                    frameCount++
-                    lastFrameAt = System.currentTimeMillis()
-                    image.close()
-                    if (frameCount % 30 == 0) {
-                        statusText?.post {
-                            statusText?.text = "Захват активен · кадров: $frameCount\nРаспознавание доски — следующий этап"
-                        }
-                    }
-                }
-            }, handler)
-
-            projection?.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    stopSelf()
-                }
-            }, handler)
-
-            virtualDisplay = projection?.createVirtualDisplay(
-                "ChessLensLive",
-                width,
-                height,
-                density,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader!!.surface,
-                null,
-                handler
-            )
-        } catch (_: SecurityException) {
-            stopSelf()
-        } catch (_: Exception) {
-            stopSelf()
-        }
-    }
-
-    private fun showOverlay() {
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(18, 14, 18, 14)
-            setBackgroundColor(Color.argb(235, 28, 25, 43))
-        }
-        val title = TextView(this).apply {
-            text = "CHESSLENS LIVE"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-        }
-        statusText = TextView(this).apply {
-            text = "Подключаем захват экрана…"
-            setTextColor(Color.LTGRAY)
-            textSize = 11f
-            setPadding(0, 8, 0, 8)
-        }
-        val stop = Button(this).apply {
-            text = "Остановить"
-            setOnClickListener { stopSelf() }
-        }
-        panel.addView(title)
-        panel.addView(statusText)
-        panel.addView(stop)
-
-        val params = LayoutParams(
-            LayoutParams.WRAP_CONTENT,
-            LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= 26) LayoutParams.TYPE_APPLICATION_OVERLAY else LayoutParams.TYPE_PHONE,
-            LayoutParams.FLAG_NOT_FOCUSABLE or LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 24
-            y = 140
-        }
-
-        panel.setOnTouchListener(object : View.OnTouchListener {
-            private var downX = 0
-            private var downY = 0
-            private var startX = 0
-            private var startY = 0
-            override fun onTouch(view: View, event: MotionEvent): Boolean {
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downX = event.rawX.toInt()
-                        downY = event.rawY.toInt()
-                        startX = params.x
-                        startY = params.y
-                        return true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        params.x = startX + event.rawX.toInt() - downX
-                        params.y = startY + event.rawY.toInt() - downY
-                        windowManager.updateViewLayout(panel, params)
-                        return true
-                    }
-                }
-                return false
+    private void sample(){
+        if(busy||reader==null)return;Image image=null;Bitmap bitmap=null;busy=true;
+        try{
+            image=reader.acquireLatestImage();if(image==null)return;bitmap=toBitmap(image);
+            BoardDetector.Board board=BoardDetector.locate(bitmap);
+            if(board==null){setStatus("Ищу шахматную доску…");clearArrows();return;}
+            lastBoard=board;setBoardFrame(board);
+            if(!engineReady){setStatus("Доска найдена · запускаю Stockfish");return;}
+            if(!classifier.isReady()){
+                if(!classifier.calibrate(bitmap,board)){setStatus("Покажи начальную расстановку фигур");return;}
+                confirmed=startingGrid();
+                whiteToMove=true;
+                setStatus(classifier.blackAtBottom()?"Калибровка: играешь чёрными":"Калибровка: играешь белыми");
+                if(!classifier.blackAtBottom())analyze(board,confirmed,bitmap);
+                return;
             }
-        })
-        try {
-            windowManager.addView(panel, params)
-            overlay = panel
-        } catch (_: Exception) {
-            stopSelf()
-        }
+            char[][] grid=classifier.classify(bitmap,board);if(grid==null)return;
+            if(equal(grid,confirmed)){candidate=null;candidateCount=0;classifier.commit(confirmed,bitmap,board);return;}
+            if(!equal(grid,candidate)){candidate=copy(grid);candidateCount=1;setStatus("Обнаружено изменение · проверяю…");return;}
+            candidateCount++;
+            if(candidateCount<2)return;
+            if(!MoveAnalyzer.validPosition(grid)){setStatus("Позиция распознана неуверенно · жду");return;}
+            MoveAnalyzer.Move move=MoveAnalyzer.detect(confirmed,grid);
+            if(!move.valid()){setStatus("Не удалось определить ход · жду следующий кадр");return;}
+            confirmed=copy(grid);classifier.commit(confirmed,bitmap,board);whiteToMove=Character.isLowerCase(move.piece);
+            candidate=null;candidateCount=0;
+            boolean userBlack=classifier.blackAtBottom();
+            boolean userTurn= userBlack ? !whiteToMove : whiteToMove;
+            if(userTurn)analyze(board,confirmed,bitmap);else{clearArrows();setEval("");setStatus("Ход соперника · жду ответа бота");}
+        }catch(Throwable t){setStatus("Анализ: "+t.getClass().getSimpleName());}
+        finally{if(image!=null)image.close();if(bitmap!=null&&!bitmap.isRecycled())bitmap.recycle();busy=false;}
     }
-
-    private fun buildNotification(): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= 26) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-        return builder
-            .setContentTitle("ChessLens Live")
-            .setContentText("Захват экрана включён")
-            .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setOngoing(true)
-            .build()
+    private void analyze(BoardDetector.Board b,char[][] grid,Bitmap bitmap){
+        if(!engineReady||engine==null)return;
+        String fen=FenBuilder.build(grid,classifier.blackAtBottom(),whiteToMove);
+        setStatus("Stockfish анализирует позицию…");
+        try{
+            List<StockfishEngine.Line> lines=engine.analyze(fen,1200,3);
+            if(lines.isEmpty()){setStatus("Нет доступных ходов");return;}
+            List<float[]> coords=new ArrayList<>();float cellX=b.square*sx,cellY=b.square*sy,ox=b.left*sx,oy=b.top*sy;
+            for(StockfishEngine.Line line:lines){
+                String u=line.move;if(u.length()<4)continue;
+                int fx=u.charAt(0)-'a',fy=8-(u.charAt(1)-'0'),tx=u.charAt(2)-'a',ty=8-(u.charAt(3)-'0');
+                if(classifier.blackAtBottom()){fx=7-fx;fy=7-fy;tx=7-tx;ty=7-ty;}
+                coords.add(new float[]{ox+(fx+.5f)*cellX,oy+(fy+.5f)*cellY,ox+(tx+.5f)*cellX,oy+(ty+.5f)*cellY});
+            }
+            if(arrows!=null)arrows.setPosition(new RectF(b.left*sx,b.top*sy,(b.left+b.side)*sx,(b.top+b.side)*sy),coords);
+            StockfishEngine.Line best=lines.get(0);
+            setEval(best.move+" · "+(best.mate?"мат":String.format(Locale.US,"%+.2f",best.cp/100.0)));
+            setStatus("Готово · лучший ход показан стрелкой");
+        }catch(Exception e){setStatus("Ошибка анализа Stockfish");}
     }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(CHANNEL_ID, "ChessLens Live", NotificationManager.IMPORTANCE_LOW)
-            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
-        }
+    private char[][] startingGrid(){char[][] g={{'r','n','b','q','k','b','n','r'},{'p','p','p','p','p','p','p','p'},{'.','.','.','.','.','.','.','.'},{'.','.','.','.','.','.','.','.'},{'.','.','.','.','.','.','.','.'},{'.','.','.','.','.','.','.','.'},{'P','P','P','P','P','P','P','P'},{'R','N','B','Q','K','B','N','R'}};if(classifier.blackAtBottom()){char[][] x=new char[8][8];for(int r=0;r<8;r++)for(int f=0;f<8;f++)x[r][f]=g[7-r][7-f];return x;}return g;}
+    private boolean equal(char[][]a,char[][]b){if(a==null||b==null)return false;for(int r=0;r<8;r++)if(!Arrays.equals(a[r],b[r]))return false;return true;}
+    private char[][] copy(char[][]a){char[][]b=new char[8][8];for(int r=0;r<8;r++)b[r]=a[r].clone();return b;}
+    private Bitmap toBitmap(Image im){
+        Image.Plane p=im.getPlanes()[0];ByteBuffer buf=p.getBuffer();int ps=p.getPixelStride(),rs=p.getRowStride(),w=im.getWidth(),h=im.getHeight(),bw=w+(rs-ps*w)/ps;
+        Bitmap raw=Bitmap.createBitmap(bw,h,Bitmap.Config.ARGB_8888);buf.rewind();raw.copyPixelsFromBuffer(buf);
+        if(bw==w)return raw;Bitmap crop=Bitmap.createBitmap(raw,0,0,w,h);raw.recycle();return crop;
     }
-
-    override fun onDestroy() {
-        try { overlay?.let { windowManager.removeView(it) } } catch (_: Exception) {}
-        overlay = null
-        virtualDisplay?.release()
-        virtualDisplay = null
-        imageReader?.close()
-        imageReader = null
-        projection?.stop()
-        projection = null
-        worker?.quitSafely()
-        worker = null
-        super.onDestroy()
+    private void showOverlay(){
+        int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY:WindowManager.LayoutParams.TYPE_PHONE;
+        arrows=new ArrowOverlayView(this);WindowManager.LayoutParams full=new WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT,WindowManager.LayoutParams.MATCH_PARENT,type,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);full.gravity=Gravity.TOP|Gravity.START;wm.addView(arrows,full);
+        LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(18,14,18,14);box.setBackgroundColor(Color.argb(238,25,23,38));
+        TextView title=new TextView(this);title.setText("CHESSLENS LIVE");title.setTextColor(Color.WHITE);title.setTextSize(14);title.setTypeface(null,1);
+        status=new TextView(this);status.setText("Запускаю…");status.setTextColor(Color.LTGRAY);status.setTextSize(11);status.setPadding(0,8,0,4);
+        eval=new TextView(this);eval.setTextColor(Color.rgb(167,139,250));eval.setTextSize(14);eval.setPadding(0,4,0,8);
+        Button pause=new Button(this);pause.setText("Пауза");pause.setOnClickListener(v->{paused=!paused;pause.setText(paused?"Продолжить":"Пауза");if(paused)clearArrows();});
+        Button stop=new Button(this);stop.setText("Остановить");stop.setOnClickListener(v->stopSelf());
+        box.addView(title);box.addView(status);box.addView(eval);box.addView(pause);box.addView(stop);
+        WindowManager.LayoutParams lp=new WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,type,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);lp.gravity=Gravity.TOP|Gravity.START;lp.x=20;lp.y=120;
+        box.setOnTouchListener(new View.OnTouchListener(){int x,y,rx,ry;public boolean onTouch(View v,MotionEvent e){if(e.getAction()==MotionEvent.ACTION_DOWN){x=(int)e.getRawX();y=(int)e.getRawY();rx=lp.x;ry=lp.y;return false;}if(e.getAction()==MotionEvent.ACTION_MOVE){lp.x=rx+(int)e.getRawX()-x;lp.y=ry+(int)e.getRawY()-y;wm.updateViewLayout(box,lp);return true;}return false;}});
+        panel=box;wm.addView(panel,lp);
     }
-
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    companion object {
-        const val EXTRA_RESULT_CODE = "projection_result_code"
-        const val EXTRA_DATA = "projection_data"
-        const val ACTION_STOP = "com.chesslens.app.STOP_LIVE"
-        private const val CHANNEL_ID = "chesslens_live"
-        private const val NOTIFICATION_ID = 4201
-    }
+    private void setBoardFrame(BoardDetector.Board b){if(arrows!=null)arrows.setPosition(new RectF(b.left*sx,b.top*sy,(b.left+b.side)*sx,(b.top+b.side)*sy),Collections.emptyList());}
+    private void clearArrows(){if(arrows!=null)arrows.clear();}
+    private void setStatus(String s){if(status!=null)status.post(()->status.setText(s));}
+    private void setEval(String s){if(eval!=null)eval.post(()->eval.setText(s));}
+    private void createChannel(){if(Build.VERSION.SDK_INT>=26){NotificationChannel c=new NotificationChannel(CHANNEL,"ChessLens Live",NotificationManager.IMPORTANCE_LOW);((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(c);}}
+    private Notification notification(){Notification.Builder b=Build.VERSION.SDK_INT>=26?new Notification.Builder(this,CHANNEL):new Notification.Builder(this);return b.setContentTitle("ChessLens Live").setContentText("Захват экрана активен").setSmallIcon(android.R.drawable.ic_menu_view).setOngoing(true).build();}
+    @Override public void onDestroy(){if(worker!=null)worker.removeCallbacksAndMessages(null);if(engine!=null)engine.close();if(display!=null)display.release();if(reader!=null)reader.close();if(projection!=null)projection.stop();if(thread!=null)thread.quitSafely();try{if(panel!=null)wm.removeView(panel);}catch(Exception ignored){}try{if(arrows!=null)wm.removeView(arrows);}catch(Exception ignored){}super.onDestroy();}
+    @Override public IBinder onBind(Intent i){return null;}
 }
