@@ -52,7 +52,7 @@ public final class PieceClassifier {
         if(s.edges<edgeThreshold)return '.';
         boolean white=Math.abs(s.luminance-whiteLum)<Math.abs(s.luminance-blackLum);
         float best=Float.MAX_VALUE;char chosen=white?'P':'p';
-        for(int i=0;i<64;i++){char c=labels[i];if(c=='.'||Character.isUpperCase(c)!=white||(((i/8+i%8)&1)!=((r+f)&1)))continue;
+        for(int i=0;i<64;i++){char c=labels[i];if(c=='.'||Character.isUpperCase(c)!=white)continue;
             float d=SquareSampler.distance(s.pixels,templates[i].pixels);if(d<best){best=d;chosen=c;}}
         return chosen;
     }
