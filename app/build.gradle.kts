@@ -21,6 +21,7 @@ android {
         jvmTarget = "17"
     }
     buildFeatures { compose = true }
+    packaging { jniLibs { useLegacyPackaging = true } }
 }
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
