@@ -73,9 +73,9 @@ public class LiveCaptureService extends Service {
             candidateCount++;
             if(candidateCount<2)return;
             if(!MoveAnalyzer.validPosition(grid)){setStatus("Позиция распознана неуверенно · жду");return;}
-            MoveAnalyzer.Move move=MoveAnalyzer.detect(confirmed,grid);
+            MoveAnalyzer.Move move=MoveAnalyzer.detect(confirmed,grid,whiteToMove);
             if(!move.valid()){setStatus("Не удалось определить ход · жду следующий кадр");return;}
-            confirmed=copy(grid);classifier.commit(confirmed,bitmap,board);whiteToMove=Character.isLowerCase(move.piece);
+            confirmed=copy(grid);classifier.commit(confirmed,bitmap,board);whiteToMove=!whiteToMove;
             candidate=null;candidateCount=0;
             boolean userBlack=classifier.blackAtBottom();
             boolean userTurn= userBlack ? !whiteToMove : whiteToMove;
