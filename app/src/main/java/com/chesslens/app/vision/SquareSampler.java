@@ -30,4 +30,26 @@ public final class SquareSampler {
     public static float distance(float[] a,float[] b){
         float d=0; for(int i=0;i<Math.min(a.length,b.length);i++){float v=a[i]-b[i];d+=v*v;} return d;
     }
+
+    /**
+     * Shape comparison resilient to global brightness/contrast changes caused
+     * by square colors, highlights and display capture.
+     */
+    public static float normalizedDistance(float[] a,float[] b){
+        int n=Math.min(a.length,b.length);
+        if(n==0)return Float.MAX_VALUE;
+        float ma=0,mb=0;
+        for(int i=0;i<n;i++){ma+=a[i];mb+=b[i];}
+        ma/=n;mb/=n;
+        float va=0,vb=0;
+        for(int i=0;i<n;i++){float da=a[i]-ma,db=b[i]-mb;va+=da*da;vb+=db*db;}
+        float sa=(float)Math.sqrt(va/n),sb=(float)Math.sqrt(vb/n);
+        sa=Math.max(sa,.035f);sb=Math.max(sb,.035f);
+        float d=0;
+        for(int i=0;i<n;i++){
+            float da=(a[i]-ma)/sa,db=(b[i]-mb)/sb;
+            float delta=da-db;d+=delta*delta;
+        }
+        return d/n;
+    }
 }
