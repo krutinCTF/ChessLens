@@ -122,8 +122,13 @@ public class LiveCaptureService extends Service {
         Button stop=new Button(this);stop.setText("Остановить");stop.setOnClickListener(v->stopSelf());
         box.addView(title);box.addView(status);box.addView(eval);box.addView(pause);box.addView(stop);
         WindowManager.LayoutParams lp=new WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,type,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,PixelFormat.TRANSLUCENT);lp.gravity=Gravity.TOP|Gravity.START;lp.x=20;lp.y=120;
-        box.setOnTouchListener(new View.OnTouchListener(){int x,y,rx,ry;public boolean onTouch(View v,MotionEvent e){if(e.getAction()==MotionEvent.ACTION_DOWN){x=(int)e.getRawX();y=(int)e.getRawY();rx=lp.x;ry=lp.y;return false;}if(e.getAction()==MotionEvent.ACTION_MOVE){lp.x=rx+(int)e.getRawX()-x;lp.y=ry+(int)e.getRawY()-y;wm.updateViewLayout(box,lp);return true;}return false;}});
-        panel=box;wm.addView(panel,lp);
+        panel=box;
+        title.setOnTouchListener(new View.OnTouchListener(){int x,y,rx,ry;public boolean onTouch(View v,MotionEvent e){
+            if(e.getAction()==MotionEvent.ACTION_DOWN){x=(int)e.getRawX();y=(int)e.getRawY();rx=lp.x;ry=lp.y;return true;}
+            if(e.getAction()==MotionEvent.ACTION_MOVE){lp.x=rx+(int)e.getRawX()-x;lp.y=ry+(int)e.getRawY()-y;wm.updateViewLayout(panel,lp);return true;}
+            return e.getAction()==MotionEvent.ACTION_UP;
+        }});
+        wm.addView(panel,lp);
     }
     private void setBoardFrame(BoardDetector.Board b){if(arrows!=null)arrows.setPosition(new RectF(b.left*sx,b.top*sy,(b.left+b.side)*sx,(b.top+b.side)*sy),Collections.emptyList());}
     private void clearArrows(){if(arrows!=null)arrows.clear();}
